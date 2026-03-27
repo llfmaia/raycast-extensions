@@ -86,8 +86,7 @@ export function ConverterForm({ initialFiles = [] }: { initialFiles?: string[] }
       let primaryFileType: MediaType | null = null;
       for (const file of files) {
         if (path.extname(file) === ".heic" && process.platform !== "darwin") {
-          continue; // Skip .heic files when not on macOS.
-          // TODO: implement SharpJS, solve this state.
+          continue; // Skip .heic files when not on macOS (sips is macOS-only).
         }
         const type = getMediaType(path.extname(file));
         if (type) {
@@ -244,7 +243,7 @@ export function ConverterForm({ initialFiles = [] }: { initialFiles?: string[] }
                 /* shortcut={{ modifiers: [], key: "return" }} */
               />
               <Action
-                title="Copy FFmpeg Command"
+                title="Copy Conversion Command"
                 icon={Icon.Clipboard}
                 shortcut={{
                   macOS: { modifiers: ["cmd", "shift"], key: "c" },
@@ -265,7 +264,10 @@ export function ConverterForm({ initialFiles = [] }: { initialFiles?: string[] }
                     await showToast({
                       style: Toast.Style.Success,
                       title: "Command copied to clipboard",
-                      message: currentFiles.length > 1 ? "Command for the first file copied" : "FFmpeg command copied",
+                      message:
+                        currentFiles.length > 1
+                          ? "Conversion code for the first file copied"
+                          : "Conversion code copied",
                     });
                   } catch (error) {
                     await showToast({
@@ -453,7 +455,7 @@ function QualitySettingsComponent({
               <Form.Dropdown.Item value="png-24" title="PNG-24 (24-bit RGB, full color)" />
               <Form.Dropdown.Item value="png-8" title="PNG-8 (8-bit indexed, 256 colors)" />
             </Form.Dropdown>
-            <Form.Description text="PNG-24 is lossless with full color range. PNG-8 uses indexed colors (256 max) for smaller file sizes. FFmpeg's PNG-8 implementation badly handles transparency." />
+            <Form.Description text="PNG-24 is lossless with full color range. PNG-8 uses indexed colors (256 max) for smaller file sizes." />
           </>
         );
       }

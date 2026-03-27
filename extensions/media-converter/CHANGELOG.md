@@ -1,5 +1,21 @@
 # Media Converter Changelog
 
+## [Image Conversion Refactored to Use Sharp] - {PR_MERGE_DATE}
+
+### Changed
+
+- Image conversion now uses [sharp](https://sharp.pixelengine.net/) instead of FFmpeg, removing the FFmpeg dependency for image-only workflows
+  - JPG, PNG-24, PNG-8, WebP, TIFF, and AVIF outputs now handled by sharp
+  - HEIC output continues to use the macOS `sips` utility (unchanged)
+  - HEIC input continues to be pre-processed via `sips` before conversion (unchanged)
+- "Copy FFmpeg Command" action renamed to "Copy Conversion Command"; for images it now copies a Node.js sharp code snippet instead of an FFmpeg command
+- FFmpeg is no longer checked at startup for image-only conversions; it is only required when converting audio or video files
+- PNG-8 description updated: sharp natively handles palette generation and dithering
+
+### Added
+
+- `sharp` (^0.34.5) as a runtime dependency
+
 ## [1.5.2] - 2025-10-31
 
 ### Added

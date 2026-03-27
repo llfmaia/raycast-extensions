@@ -164,14 +164,6 @@ export default async function ConvertMedia(input: Input) {
     proresVariant,
     vp9Quality,
   } = input;
-  const installed = await findFFmpegPath();
-  if (!installed) {
-    return {
-      type: "error",
-      message: "FFmpeg is not installed. Please install FFmpeg to use this tool.",
-    };
-  }
-
   let fullPath: string;
   let mediaType: "image" | "audio" | "video" | null;
 
@@ -191,6 +183,17 @@ export default async function ConvertMedia(input: Input) {
       type: "error",
       message: String(error),
     };
+  }
+
+  // FFmpeg is only required for audio and video conversions; images use sharp
+  if (mediaType !== "image") {
+    const installed = await findFFmpegPath();
+    if (!installed) {
+      return {
+        type: "error",
+        message: "FFmpeg is not installed. Please install FFmpeg to convert audio or video files.",
+      };
+    }
   }
 
   try {

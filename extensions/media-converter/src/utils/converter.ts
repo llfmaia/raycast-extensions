@@ -3,6 +3,7 @@ import fs from "fs";
 import os from "os";
 import { findFFmpegPath } from "./ffmpeg";
 import { execPromise } from "./exec";
+import { convertImageWithSharp, buildSharpCommandString } from "./image-converter";
 import {
   AllOutputExtension,
   OutputImageExtension,
@@ -43,14 +44,6 @@ export async function convertMedia<T extends AllOutputExtension>(
   quality: QualitySettings,
   returnCommandString = false,
 ): Promise<string> {
-  const ffmpegPath = await findFFmpegPath();
-
-  // In theory, this should never happen
-  if (!ffmpegPath) {
-    throw new Error("FFmpeg is not installed or configured. Please install FFmpeg to use this converter.");
-  }
-
-  let ffmpegCmd = `"${ffmpegPath.path}" -i`;
   const currentMediaType = getMediaType(path.extname(filePath))!;
   switch (currentMediaType) {
     case "image": {
@@ -58,137 +51,16 @@ export async function convertMedia<T extends AllOutputExtension>(
       const imageQuality = quality as ImageQuality;
       const finalOutputPath = getUniqueOutputPath(filePath, currentOutputFormat);
 
-      let tempHeicFile: string | null = null;
-      let tempPaletteFile: string | null = null;
-      const extension = path.extname(filePath).toLowerCase();
-      let processedInputPath = filePath;
+      if (returnCommandString) {
+        return buildSharpCommandString(filePath, currentOutputFormat, imageQuality, finalOutputPath);
+      }
 
       try {
-        // HEIC conversion is theoretically only available on macOS via the built-in SIPS utility.
-        if (currentOutputFormat === ".heic") {
-          const sipsCmd = `sips --setProperty format heic --setProperty formatOptions ${imageQuality[".heic"]} "${filePath}" --out "${finalOutputPath}"`;
-          if (returnCommandString) {
-            return sipsCmd;
-          }
-          try {
-            // Attempt HEIC conversion using SIPS directly
-            await execPromise(sipsCmd);
-          } catch (error) {
-            // Parse error to provide more specific feedback
-            const errorMessage = String(error);
-
-            if (errorMessage.includes("command not found") || errorMessage.includes("not recognized")) {
-              throw new Error(
-                "HEIC conversion failed: 'sips' command not found. " +
-                  "Converting to HEIC format is theoretically only available on macOS, " +
-                  "as it requires the built-in SIPS utility with proper HEIC support " +
-                  "(libheif, libde265, and x265 dependencies).",
-              );
-            } else {
-              throw new Error(
-                "HEIC conversion failed: SIPS command found but conversion unsuccessful. " +
-                  "This may indicate that your SIPS installation lacks proper HEIC support. " +
-                  "Converting to HEIC format typically requires macOS with built-in SIPS that includes " +
-                  "libheif, libde265, and x265 dependencies. Error details: " +
-                  String(error),
-              );
-            }
-          }
-        } else {
-          // If the input file is HEIC and the output format is not HEIC, convert to PNG first
-          if (extension === ".heic") {
-            if (returnCommandString) {
-              // For command string, use original file (assuming user handles preprocessing)
-              processedInputPath = filePath;
-            } else {
-              try {
-                const tempFileName = `${path.basename(filePath, ".heic")}_temp_${Date.now()}.png`;
-                tempHeicFile = path.join(os.tmpdir(), tempFileName);
-
-                await execPromise(`sips --setProperty format png "${filePath}" --out "${tempHeicFile}"`);
-
-                processedInputPath = tempHeicFile;
-              } catch (error) {
-                console.error(`Error pre-processing HEIC file: ${filePath}`, error);
-                if (tempHeicFile && fs.existsSync(tempHeicFile)) {
-                  fs.unlinkSync(tempHeicFile);
-                }
-                throw new Error(`Failed to preprocess HEIC file: ${String(error)}`);
-              }
-            }
-          }
-
-          ffmpegCmd += ` "${processedInputPath}"`;
-
-          switch (currentOutputFormat) {
-            case ".jpg":
-              // mjpeg takes in 2 (best) to 31 (worst)
-              ffmpegCmd += ` -q:v ${Math.round(31 - (imageQuality[".jpg"] / 100) * 29)}`;
-              break;
-            case ".png":
-              if (imageQuality[".png"] === "png-8") {
-                if (returnCommandString) {
-                  // For command string, assume palette is generated separately
-                  const tempPaletteFileName = `${path.basename(filePath, path.extname(filePath))}_palette.png`;
-                  tempPaletteFile = path.join(os.tmpdir(), tempPaletteFileName);
-                  const paletteCmd = `"${ffmpegPath.path}" -i "${processedInputPath}" -vf "palettegen=max_colors=256" -y "${tempPaletteFile}"`;
-                  ffmpegCmd = `"${ffmpegPath.path}" -i "${processedInputPath}" -i "${tempPaletteFile}" -lavfi "paletteuse=dither=bayer:bayer_scale=5" -compression_level 100 -y "${finalOutputPath}"`;
-                  return `${paletteCmd}\n${ffmpegCmd}`;
-                } else {
-                  const tempPaletteFileName = `${path.basename(filePath, path.extname(filePath))}_palette_${Date.now()}.png`;
-                  tempPaletteFile = path.join(os.tmpdir(), tempPaletteFileName);
-
-                  // Generate palette first
-                  await execPromise(
-                    `"${ffmpegPath.path}" -i "${processedInputPath}" -vf "palettegen=max_colors=256" -y "${tempPaletteFile}"`,
-                  );
-                  // Then apply palette
-                  ffmpegCmd = `"${ffmpegPath.path}" -i "${processedInputPath}" -i "${tempPaletteFile}" -lavfi "paletteuse=dither=bayer:bayer_scale=5"`;
-                }
-              }
-              if (!returnCommandString || imageQuality[".png"] !== "png-8") {
-                ffmpegCmd += ` -compression_level 100`;
-              }
-              break;
-            case ".webp":
-              ffmpegCmd += " -c:v libwebp";
-              if (imageQuality[".webp"] === "lossless") {
-                ffmpegCmd += " -lossless 1";
-              } else {
-                ffmpegCmd += ` -quality ${imageQuality[".webp"]}`;
-              }
-              break;
-            case ".tiff":
-              ffmpegCmd += ` -compression_algo ${imageQuality[".tiff"]}`;
-              break;
-            case ".avif":
-              // libaom-av1 takes in 0 (best/lossless) to 63 (worst)
-              ffmpegCmd += ` -c:v libaom-av1 -crf ${Math.round(63 - (Number(imageQuality[".avif"]) / 100) * 63)} -still-picture 1`;
-              break;
-          }
-          if (currentOutputFormat !== ".png" || imageQuality[".png"] !== "png-8") {
-            ffmpegCmd += ` -y "${finalOutputPath}"`;
-          } else {
-            ffmpegCmd += ` "${finalOutputPath}"`;
-          }
-          if (returnCommandString) {
-            return ffmpegCmd;
-          }
-          console.log(`Executing FFmpeg image command: ${ffmpegCmd}`);
-          await execPromise(ffmpegCmd);
-        }
+        await convertImageWithSharp(filePath, currentOutputFormat, imageQuality, finalOutputPath);
         return finalOutputPath;
       } catch (error) {
-        console.error(`Error converting ${processedInputPath} to ${currentOutputFormat}:`, error);
+        console.error(`Error converting ${filePath} to ${currentOutputFormat}:`, error);
         throw error;
-      } finally {
-        // Clean up temp files if they exist
-        if (tempHeicFile && fs.existsSync(tempHeicFile)) {
-          fs.unlinkSync(tempHeicFile);
-        }
-        if (tempPaletteFile && fs.existsSync(tempPaletteFile)) {
-          fs.unlinkSync(tempPaletteFile);
-        }
       }
     }
 
@@ -197,7 +69,11 @@ export async function convertMedia<T extends AllOutputExtension>(
       const audioQuality = quality as AudioQuality;
       const finalOutputPath = getUniqueOutputPath(filePath, currentOutputFormat);
 
-      ffmpegCmd += ` "${filePath}"`;
+      const ffmpegPathAudio = await findFFmpegPath();
+      if (!ffmpegPathAudio) {
+        throw new Error("FFmpeg is not installed or configured. Please install FFmpeg to convert audio files.");
+      }
+      let ffmpegCmd = `"${ffmpegPathAudio.path}" -i "${filePath}"`;
 
       switch (currentOutputFormat) {
         case ".mp3": {
@@ -256,7 +132,11 @@ export async function convertMedia<T extends AllOutputExtension>(
       const currentOutputFormat = outputFormat as OutputVideoExtension;
       const videoQuality = quality as VideoQuality;
 
-      ffmpegCmd += ` "${filePath}"`;
+      const ffmpegPathVideo = await findFFmpegPath();
+      if (!ffmpegPathVideo) {
+        throw new Error("FFmpeg is not installed or configured. Please install FFmpeg to convert video files.");
+      }
+      let ffmpegCmd = `"${ffmpegPathVideo.path}" -i "${filePath}"`;
 
       // Add format-specific codec and settings
       switch (currentOutputFormat) {
